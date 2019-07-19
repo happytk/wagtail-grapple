@@ -6,3 +6,4 @@ channels==1.1.8
 asgi_redis
 graphql_ws
 wagtailmedia
+git+https://github.com/zerolab/wagtail-headless-preview.git@46b655e#egg=wagtail-headless-preview
