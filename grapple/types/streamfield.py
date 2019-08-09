@@ -218,8 +218,12 @@ def register_streamfield_blocks():
         def resolve_image(self, info, **kwargs):
             return self.value
 
+    class StreamSnippetObjectType(graphene.Union):
+        class Meta:
+            types = registry.snippets.types
+
     class SnippetChooserBlock(graphene.ObjectType):
-        snippet = graphene.String()
+        snippet = graphene.Field(StreamSnippetObjectType)
 
         class Meta:
             interfaces = (StreamFieldInterface,)
