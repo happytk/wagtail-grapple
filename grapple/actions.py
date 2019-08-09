@@ -1,13 +1,16 @@
 import graphene
 import inspect
 from typing import Type
+from types import MethodType
 from django.db import models
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from wagtail.contrib.settings.models import BaseSetting
 from wagtail.core.models import Page as WagtailPage
+from wagtail.core.blocks import BaseBlock, RichTextBlock
 from wagtail.documents.models import AbstractDocument
 from wagtail.images.models import AbstractImage
+from wagtail.images.blocks import ImageChooserBlock
 from wagtail.snippets.models import get_snippet_models
 from graphene_django.types import DjangoObjectType
 
@@ -15,7 +18,9 @@ from graphene_django.types import DjangoObjectType
 from .registry import registry
 from .types.pages import PageInterface, Page
 from .types.documents import DocumentObjectType
+from .types.streamfield import generate_streamfield_union
 from .types.images import ImageObjectType
+from .helpers import streamfield_types
 
 
 def import_apps():
@@ -27,14 +32,29 @@ def import_apps():
         add_app(name, prefix)
         registry.apps.append(name)
 
+    for streamfield_type in streamfield_types:
+        cls = streamfield_type["cls"]
+        base_type = streamfield_type["base_type"]
+
+        if hasattr(cls, "graphql_types"):
+            base_type = generate_streamfield_union(cls.graphql_types)
+
+        node_type = build_streamfield_type(
+            cls,
+            streamfield_type["type_prefix"],
+            streamfield_type["interface"],
+            base_type,
+        )
+
+        registry.streamfield_blocks[streamfield_type["cls"]] = node_type
+
 
 def add_app(app: str, prefix: str = ""):
     """
     Iterate through each model in the app and pass it to node type creators.
     """
 
-    # Create a collection of models of standard models (Pages, Images,
-    # Documents).
+    # Create a collection of models of standard models (Pages, Images, Documents).
     models = [
         mdl.model_class() for mdl in ContentType.objects.filter(app_label=app).all()
         if mdl.model_class()
@@ -56,18 +76,21 @@ def register_model(cls: type, type_prefix: str):
     """
 
     # Pass class to correct type creator.
-    if issubclass(cls, WagtailPage):
-        register_page_model(cls, type_prefix)
-    elif issubclass(cls, AbstractDocument):
-        register_documment_model(cls, type_prefix)
-    elif issubclass(cls, AbstractImage):
-        register_image_model(cls, type_prefix)
-    elif issubclass(cls, BaseSetting):
-        register_settings_model(cls, type_prefix)
-    elif cls in get_snippet_models():
-        register_snippet_model(cls, type_prefix)
-    else:
-        register_django_model(cls, type_prefix)
+    if cls is not None:
+        if issubclass(cls, WagtailPage):
+            register_page_model(cls, type_prefix)
+        elif issubclass(cls, AbstractDocument):
+            register_documment_model(cls, type_prefix)
+        elif issubclass(cls, AbstractImage):
+            register_image_model(cls, type_prefix)
+        elif issubclass(cls, BaseSetting):
+            register_settings_model(cls, type_prefix)
+        elif cls in get_snippet_models():
+            register_snippet_model(cls, type_prefix)
+        elif issubclass(cls, BaseBlock):
+            register_streamfield_model(cls, type_prefix)
+        else:
+            register_django_model(cls, type_prefix)
 
 
 def get_fields_and_properties(cls):
@@ -130,6 +153,71 @@ def build_node_type(
     type_meta["Meta"].exclude_fields = exclude_fields
 
     return type(type_name, (base_type,), type_meta)
+
+
+def convert_to_underscore(name):
+    import re
+
+    s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+    return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+
+
+def streamfield_resolver(self, instance, info, **kwargs):
+    field_name = convert_to_underscore(info.field_name)
+    block = instance.block.child_blocks[field_name]
+    value = instance.value[field_name]
+
+    if issubclass(type(block), ImageChooserBlock) and isinstance(value, int):
+        return block.to_python(value)
+
+    return value
+
+
+def build_streamfield_type(
+    cls: type,
+    type_prefix: str,
+    interface: graphene.Interface,
+    base_type=graphene.ObjectType,
+):
+    """
+    Build a graphql type for a StreamBlock or StructBlock class
+    If it has custom fields then implement them.
+    """
+    # Create a new blank node type
+    class Meta:
+        if hasattr(cls, "graphql_types"):
+            types = [
+                registry.streamfield_blocks.get(block) for block in cls.graphql_types
+            ]
+        else:
+            interfaces = (interface,) if interface is not None else tuple()
+
+    methods = {}
+    type_name = type_prefix + cls.__name__
+    type_meta = {"Meta": Meta}
+    type_meta.update({"id": graphene.String()})
+
+    # Add any custom fields to node if they are defined.
+    if hasattr(cls, "graphql_fields"):
+        for field in cls.graphql_fields:
+            if callable(field):
+                field = field()
+
+            # Add support for `graphql_fields`
+            methods["resolve_" + field.field_name] = streamfield_resolver
+
+            # Add field to GQL type with correct field-type
+            if field.field_type is not None:
+                type_meta[field.field_name] = field.field_type
+
+    # Set excluded fields to stop errors cropping up from unsupported field
+    # types.
+    graphql_node = type(type_name, (base_type,), type_meta)
+
+    for name, method in methods.items():
+        setattr(graphql_node, name, MethodType(method, graphql_node))
+
+    return graphql_node
 
 
 def register_page_model(cls: Type[WagtailPage], type_prefix: str):

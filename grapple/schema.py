@@ -2,21 +2,22 @@ import graphene
 from graphql.validation.rules import NoUnusedFragments, specified_rules
 
 from .actions import import_apps
-from .types.pages import PagesQuery, PagesSubscription
-from .types.images import ImagesQuery
-from .types.documents import DocumentsQuery
-from .types.snippets import SnippetsQuery
-from .types.settings import SettingsQuery
-from .types.search import SearchQuery
-from .types.streamfield import register_streamfield_blocks
 from .registry import registry
+from .types.documents import DocumentsQuery
+from .types.images import ImagesQuery
+from .types.pages import PagesQuery, PagesSubscription
+from .types.search import SearchQuery
+from .types.settings import SettingsQuery
+from .types.snippets import SnippetsQuery
+from .types.streamfield import register_streamfield_blocks
 
-"""
-Import all the django apps defined in django settings then process each model
-in these apps and create graphql node types from them.
+"""	
+Import all the django apps defined in django settings then process each model	
+in these apps and create graphql node types from them.	
 """
 import_apps()
 register_streamfield_blocks()
+
 
 """
 Root schema object that graphene is pointed at.
@@ -33,10 +34,8 @@ It inherits its queries from each of the specific type mixins.
 # We need to update specified_rules in-place so the change appears
 # everywhere it's been imported
 
-specified_rules[:] = [
-    rule for rule in specified_rules
-    if rule is not NoUnusedFragments
-]
+specified_rules[:] = [rule for rule in specified_rules if rule is not NoUnusedFragments]
+
 
 class Query(
     graphene.ObjectType,

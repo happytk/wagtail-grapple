@@ -1,4 +1,5 @@
 import os
+import codecs
 import urllib.parse
 import graphene
 
@@ -43,7 +44,7 @@ class ImageObjectType(DjangoObjectType):
         bgcolor=graphene.String(),
         jpegquality=graphene.Int(),
     )
-    traced_SVG = graphene.String(name='tracedSVG')
+    traced_SVG = graphene.String(name="tracedSVG")
     base64 = graphene.String()
     aspect_ratio = graphene.Float()
     sizes = graphene.String()
@@ -66,7 +67,9 @@ class ImageObjectType(DjangoObjectType):
         """
         Get url of the original uploaded image.
         """
-        return settings.BASE_URL + self.file.url
+        if self.file.url[0] == "/":
+            return settings.BASE_URL + self.file.url
+        return self.file.url
 
     def resolve_src_set(self, info, sizes, **kwargs):
         """
@@ -93,15 +96,19 @@ class ImageObjectType(DjangoObjectType):
         Intended to be used by Gatsby Image. Trace a bitmap image and return a small-sized svg that can be pre-rendered
         as background image while actual image is downloaded via network.
         """
-        temp_image = convert_image_to_bmp(settings.BASE_DIR + self.file.url)
         svg_trace_image = (
             settings.BASE_DIR + os.path.splitext(self.file.url)[0] + "-traced.svg"
         )
         if not os.path.isfile(svg_trace_image):
+            temp_image = convert_image_to_bmp(self.file.path)
             trace_bitmap(temp_image, svg_trace_image)
 
-        with open(svg_trace_image, "r") as svgFile:
-            return "data:image/svg+xml," + urllib.parse.quote(svgFile.read())
+        with codecs.open(
+            svg_trace_image, "r", encoding="utf-8", errors="ignore"
+        ) as svgFile:
+            file = "data:image/svg+xml," + urllib.parse.quote(svgFile.read())
+
+        return file
 
     def resolve_aspect_ratio(self, info, **kwargs):
         """
@@ -115,6 +122,7 @@ class ImageObjectType(DjangoObjectType):
 
 def ImagesQuery():
     from wagtail.images import get_image_model
+
     registry.images[WagtailImage] = ImageObjectType
     mdl = get_image_model()
     model_type = registry.images[mdl]
@@ -131,6 +139,7 @@ def ImagesQuery():
 
 def get_image_type():
     from wagtail.images import get_image_model
+
     registry.images[WagtailImage] = ImageObjectType
     mdl = get_image_model()
     return registry.images[mdl]
