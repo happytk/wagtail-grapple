@@ -37,6 +37,7 @@ def add_app(app: str, prefix: str = ""):
     # Documents).
     models = [
         mdl.model_class() for mdl in ContentType.objects.filter(app_label=app).all()
+        if mdl.model_class()
     ]
 
     # Add snippet models to model collection.
