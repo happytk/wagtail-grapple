@@ -93,7 +93,7 @@ def GraphQLDocument(field_name: str):
 
     document_type = "wagtaildocs.Document"
     if hasattr(settings, "WAGTAILDOCS_DOCUMENT_MODEL"):
-        document_type = settings["WAGTAILDOCS_DOCUMENT_MODEL"]
+        document_type = settings.WAGTAILDOCS_DOCUMENT_MODEL
 
     return GraphQLForeignKey(field_name, document_type)
 
