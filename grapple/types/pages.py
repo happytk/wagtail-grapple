@@ -9,7 +9,7 @@ from django.dispatch import receiver
 from ..signals import preview_update
 from ..registry import registry
 from ..utils import resolve_queryset
-from .structures import QuerySetList
+from .structures import QuerySetList, TagList
 
 
 class PageInterface(graphene.Interface):
@@ -24,6 +24,7 @@ class PageInterface(graphene.Interface):
     seo_description = graphene.String()
     show_in_menus = graphene.Boolean()
     content_type = graphene.String()
+    tags = TagList()
     parent = graphene.Field(lambda: PageInterface)
     children = QuerySetList(lambda: PageInterface, enable_search=True)
     siblings = QuerySetList(lambda: PageInterface, enable_search=True)
@@ -125,9 +126,9 @@ def get_specific_page(id, slug, token, content_type=None):
     page = None
     try:
         if id:
-            page = WagtailPage.objects.live().public().specific().get(pk=id)
+            page = WagtailPage.objects.specific().get(pk=id)
         if slug:
-            page = WagtailPage.objects.live().public().specific().get(slug=slug)
+            page = WagtailPage.objects.specific().get(slug=slug)
         if token and page:
             page_type = type(page)
             page = page_type.get_page_from_preview_token(token)
@@ -147,7 +148,7 @@ def PagesQuery():
     registry.pages[type(WagtailPage)] = Page
 
     class Mixin:
-        pages = QuerySetList(lambda: PageInterface, enable_search=True)
+        pages = QuerySetList(lambda: PageInterface, enable_search=True, filter_type=graphene.String())
         page = graphene.Field(
             PageInterface,
             id=graphene.Int(),
@@ -158,8 +159,14 @@ def PagesQuery():
 
         # Return all pages, ideally specific.
         def resolve_pages(self, info, **kwargs):
+            filter_type = kwargs.get('filter_type')
+            queryset = WagtailPage.objects.specific()
+            if filter_type:
+                from django.contrib.contenttypes.models import ContentType
+                content_type = ContentType.objects.get(model=filter_type)
+                queryset = queryset.filter(content_type=content_type)
             return resolve_queryset(
-                WagtailPage.objects.live().public().specific(), info, **kwargs
+                queryset, info, **kwargs
             )
 
         # Return a specific page, identified by ID or Slug.

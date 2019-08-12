@@ -107,5 +107,5 @@ class TagList(graphene.JSONString):
     @staticmethod
     def serialize(value):
         if isinstance(value, _TaggableManager):
-            return list(value.values_list("name", flat=True))
+            return [dict(id=r[1], name=r[0]) for r in value.values_list("name", "id")]
         raise ValueError("Cannot convert tags object")

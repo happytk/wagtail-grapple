@@ -10,14 +10,14 @@ def SnippetsQuery():
                 types = registry.snippets.types
 
         class Mixin:
-            snippets = graphene.List(SnippetObjectType, search_type=graphene.String())
+            snippets = graphene.List(SnippetObjectType, filter_type=graphene.String())
             # Return all snippets.
 
             def resolve_snippets(self, info, **kwargs):
                 snippet_objects = []
-                search_type = kwargs.get('search_type')
+                filter_type = kwargs.get('filter_type')
                 for snippet in registry.snippets:
-                    if search_type is None or search_type == snippet._meta.model_name:
+                    if filter_type is None or filter_type == snippet._meta.model_name:
                         for object in snippet._meta.model.objects.all():
                             snippet_objects.append(object)
 
