@@ -13,7 +13,7 @@ from wagtail.images.models import AbstractImage
 from wagtail.images.blocks import ImageChooserBlock
 from wagtail.snippets.models import get_snippet_models
 from graphene_django.types import DjangoObjectType
-
+from graphene.types.generic import GenericScalar
 
 from .registry import registry
 from .types.pages import PageInterface, Page
@@ -172,6 +172,12 @@ def streamfield_resolver(self, instance, info, **kwargs):
 
     return value
 
+def streamfield_render(self, instance, info, **kwargs):
+    # field_name = convert_to_underscore(info.field_name)
+    # block = instance.block.child_blocks[field_name]
+    # value = instance.value[field_name]
+    return instance.render()
+
 
 def build_streamfield_type(
     cls: type,
@@ -192,17 +198,19 @@ def build_streamfield_type(
         else:
             interfaces = (interface,) if interface is not None else tuple()
 
-    methods = {}
+    methods = {
+        "resolve__dangerous_render": streamfield_render
+    }
     type_name = type_prefix + cls.__name__
     type_meta = {"Meta": Meta}
     type_meta.update({"id": graphene.String()})
+    type_meta.update({"_dangerous_render": graphene.String()})
 
     # Add any custom fields to node if they are defined.
     if hasattr(cls, "graphql_fields"):
         for field in cls.graphql_fields:
             if callable(field):
-                field = field()
-
+                field = field()    
             # Add support for `graphql_fields`
             methods["resolve_" + field.field_name] = streamfield_resolver
 
