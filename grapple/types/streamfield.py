@@ -315,10 +315,15 @@ class ListBlock(graphene.ObjectType):
     class Meta:
         interfaces = (StreamFieldInterface,)
 
-    items = graphene.Field(StreamFieldInterface)
+    items = graphene.List(StreamFieldInterface)
 
     def resolve_items(self, info, **kwargs):
-        return self
+        stream_blocks = []
+        for index, value in enumerate(self.value):
+            block = self.block.child_blocks['items']
+            block = block(**value)    
+            stream_blocks.append(StructBlockItem(index, block, value))
+        return stream_blocks
 
 
 registry.streamfield_blocks.update(
