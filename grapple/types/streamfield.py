@@ -319,10 +319,12 @@ class ListBlock(graphene.ObjectType):
 
     def resolve_items(self, info, **kwargs):
         stream_blocks = []
+        block = self.block.child_blocks['items']
         for index, value in enumerate(self.value):
-            block = self.block.child_blocks['items']
-            block = block(**value)    
-            stream_blocks.append(StructBlockItem(index, block, value))
+            if isinstance(value, wagtail.core.blocks.struct_block.StructValue):
+                stream_blocks.append(StructBlockItem(index, block(**value), value))
+            else:
+                stream_blocks.append(StructBlockItem(index, block(value), value))
         return stream_blocks
 
 
