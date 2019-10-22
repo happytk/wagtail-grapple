@@ -25,6 +25,7 @@ BASE_DIR = os.path.dirname(PROJECT_DIR)
 
 INSTALLED_APPS = [
     "home",
+    "images",
     "search",
     "wagtail.contrib.forms",
     "wagtail.contrib.redirects",
@@ -48,6 +49,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "corsheaders",
+    "wagtail_headless_preview",
     # GRAPPLE SPECIFIC MODULES
     "grapple",
     "graphene_django",
@@ -151,6 +153,7 @@ MEDIA_URL = "/media/"
 # Wagtail settings
 
 WAGTAIL_SITE_NAME = "example"
+WAGTAILIMAGES_IMAGE_MODEL = "images.CustomImage"
 
 # Base URL to use when referring to full URLs within the Wagtail admin backend -
 # e.g. in notification emails. Don't include '/admin' or a trailing slash
@@ -160,11 +163,13 @@ CORS_ORIGIN_ALLOW_ALL = True
 
 # Grapple Config:
 GRAPHENE = {"SCHEMA": "grapple.schema.schema"}
-GRAPPLE_APPS = {"home": ""}
+GRAPPLE_APPS = {"images": "", "home": ""}
 GRAPPLE_ADD_SEARCH_HIT = True
 
+HEADLESS_PREVIEW_CLIENT_URLS = {"default": "http://localhost:8001/preview"}
+HEADLESS_PREVIEW_LIVE = True
+
 ASGI_APPLICATION = "asgi.channel_layer"
-GRAPPLE_PREVIEW_URL = "http://localhost:8001/preview"
 CHANNELS_WS_PROTOCOLS = ["graphql-ws"]
 CHANNEL_LAYERS = {
     "default": {

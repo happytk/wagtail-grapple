@@ -15,18 +15,20 @@ from wagtail.snippets.blocks import SnippetChooserBlock
 from wagtail.snippets.edit_handlers import SnippetChooserPanel
 from wagtail.images.edit_handlers import ImageChooserPanel
 from wagtail.documents.edit_handlers import DocumentChooserPanel
+
+from wagtail_headless_preview.models import HeadlessPreviewMixin
 from wagtailmedia.edit_handlers import MediaChooserPanel
 
 from grapple.models import (
     GraphQLField,
     GraphQLString,
     GraphQLSnippet,
-    GrapplePageMixin,
     GraphQLStreamfield,
     GraphQLForeignKey,
     GraphQLImage,
     GraphQLDocument,
     GraphQLMedia,
+    GraphQLCollection
 )
 from home.blocks import StreamFieldBlock
 
@@ -35,8 +37,7 @@ class HomePage(Page):
     pass
 
 
-class BlogPage(GrapplePageMixin, Page):
-    author = models.CharField(max_length=255)
+class BlogPage(HeadlessPreviewMixin, Page):
     date = models.DateField("Post date")
     advert = models.ForeignKey(
         "home.Advert",
@@ -69,26 +70,44 @@ class BlogPage(GrapplePageMixin, Page):
     body = StreamField(StreamFieldBlock())
 
     content_panels = Page.content_panels + [
-        FieldPanel("author"),
         FieldPanel("date"),
         ImageChooserPanel("cover"),
         StreamFieldPanel("body"),
         InlinePanel("related_links", label="Related links"),
+        InlinePanel("authors", label="Authors"),
         SnippetChooserPanel("advert"),
         DocumentChooserPanel("book_file"),
         MediaChooserPanel("featured_media"),
     ]
 
+    @property
+    def copy(self):
+        return self
+
     graphql_fields = [
         GraphQLString("heading"),
         GraphQLString("date"),
-        GraphQLString("author"),
         GraphQLStreamfield("body"),
-        GraphQLForeignKey("related_links", "home.blogpagerelatedlink", True),
+        GraphQLCollection(
+            GraphQLForeignKey,
+            "related_links",
+            "home.blogpagerelatedlink"
+        ),
+        GraphQLCollection(
+            GraphQLString,
+            "related_urls",
+            source="related_links.url"
+        ),
+        GraphQLCollection(
+            GraphQLString,
+            "authors",
+            source="authors.person.name"
+        ),
         GraphQLSnippet("advert", "home.Advert"),
         GraphQLImage("cover"),
         GraphQLDocument("book_file"),
         GraphQLMedia("featured_media"),
+        GraphQLForeignKey('copy', 'home.BlogPage')
     ]
 
 
@@ -100,6 +119,41 @@ class BlogPageRelatedLink(Orderable):
     panels = [FieldPanel("name"), FieldPanel("url")]
 
     graphql_fields = [GraphQLString("name"), GraphQLString("url")]
+
+
+@register_snippet
+class Person(models.Model):
+    name = models.CharField(max_length=255)
+    job = models.CharField(max_length=255)
+
+    def __str__(self):
+        return self.name
+
+    panels = [FieldPanel("name"), FieldPanel("job")]
+
+    graphql_fields = [
+        GraphQLString("name"),
+        GraphQLString("job"),
+    ]
+
+
+class Author(Orderable):
+    page = ParentalKey(BlogPage, on_delete=models.CASCADE, related_name="authors")
+    role = models.CharField(max_length=255)
+    person = models.ForeignKey(
+        Person,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
+    panels = [FieldPanel("role"), SnippetChooserPanel("person")]
+
+    graphql_fields = [
+        GraphQLString("role"),
+        GraphQLForeignKey("person", Person)
+    ]
 
 
 @register_snippet
@@ -122,7 +176,8 @@ class SocialMediaSettings(BaseSetting):
         max_length=255, help_text="Your Instagram username, without the @"
     )
     trip_advisor = models.URLField(help_text="Your Trip Advisor page URL")
-    youtube = models.URLField(help_text="Your YouTube channel or user account URL")
+    youtube = models.URLField(
+        help_text="Your YouTube channel or user account URL")
 
     graphql_fields = [
         GraphQLString("facebook"),

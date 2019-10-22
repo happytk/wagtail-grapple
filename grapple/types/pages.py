@@ -1,12 +1,12 @@
 import graphene
 from django.contrib.contenttypes.models import ContentType
 from wagtail.core.models import Page as WagtailPage
+from wagtail_headless_preview.signals import preview_update
 from graphene_django.types import DjangoObjectType
 from graphql.execution.base import ResolveInfo
 from rx.subjects import Subject
 from django.dispatch import receiver
 
-from ..signals import preview_update
 from ..registry import registry
 from ..utils import resolve_queryset
 from .structures import QuerySetList, TagList
@@ -25,6 +25,7 @@ class PageInterface(graphene.Interface):
     show_in_menus = graphene.Boolean()
     content_type = graphene.String()
     tags = TagList()
+    last_published_at = graphene.DateTime()
     parent = graphene.Field(lambda: PageInterface)
     children = QuerySetList(lambda: PageInterface, enable_search=True)
     siblings = QuerySetList(lambda: PageInterface, enable_search=True)
@@ -118,8 +119,6 @@ class Page(DjangoObjectType):
 
 
 def get_specific_page(id, slug, token, content_type=None):
-    from ..models import PagePreview
-
     """
     Get a spcecific page, also get preview if token is passed
     """
@@ -127,16 +126,20 @@ def get_specific_page(id, slug, token, content_type=None):
     try:
         if id:
             page = WagtailPage.objects.specific().get(pk=id)
-        if slug:
+        elif slug:
             page = WagtailPage.objects.specific().get(slug=slug)
-        if token and page:
-            page_type = type(page)
-            page = page_type.get_page_from_preview_token(token)
-        if token and content_type:
-            app_label, model = content_type.lower().split(".")
-            mdl = ContentType.objects.get(app_label=app_label, model=model)
-            page = mdl.model_class().get_page_from_preview_token(token)
 
+        if token:
+            if page:
+                page_type = type(page)
+                if hasattr(page_type, "get_page_from_preview_token"):
+                    page = page_type.get_page_from_preview_token(token)
+            elif content_type:
+                app_label, model = content_type.lower().split(".")
+                mdl = ContentType.objects.get(app_label=app_label, model=model)
+                cls = mdl.model_class()
+                if hasattr(cls, "get_page_from_preview_token"):
+                    page = cls.get_page_from_preview_token(token)
     except BaseException:
         page = None
 

@@ -2,14 +2,17 @@ import graphene
 import inspect
 from typing import Type
 from types import MethodType
+from collections.abc import Iterable
+
 from django.db import models
+from django.db.models.query import QuerySet
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from wagtail.contrib.settings.models import BaseSetting
 from wagtail.core.models import Page as WagtailPage
 from wagtail.core.blocks import BaseBlock, RichTextBlock
 from wagtail.documents.models import AbstractDocument
-from wagtail.images.models import AbstractImage
+from wagtail.images.models import AbstractImage, AbstractRendition
 from wagtail.images.blocks import ImageChooserBlock
 from wagtail.snippets.models import get_snippet_models
 from graphene_django.types import DjangoObjectType
@@ -27,11 +30,14 @@ def import_apps():
     """
     Add each django app set in the settings file
     """
+
+    # Register each app in the django project.
     apps = settings.GRAPPLE_APPS.items()
     for name, prefix in apps:
         add_app(name, prefix)
         registry.apps.append(name)
 
+    # Register any 'decorated' streamfield structs.
     for streamfield_type in streamfield_types:
         cls = streamfield_type["cls"]
         base_type = streamfield_type["base_type"]
@@ -49,20 +55,21 @@ def import_apps():
         registry.streamfield_blocks[streamfield_type["cls"]] = node_type
 
 
-def add_app(app: str, prefix: str = ""):
+def add_app(app_label: str, prefix: str = ""):
     """
     Iterate through each model in the app and pass it to node type creators.
     """
+    from django.apps import apps
+
+    # Get the required django app.
+    app = apps.get_app_config(app_label)
 
     # Create a collection of models of standard models (Pages, Images, Documents).
-    models = [
-        mdl.model_class() for mdl in ContentType.objects.filter(app_label=app).all()
-        if mdl.model_class()
-    ]
+    models = [mdl for mdl in app.get_models()]
 
     # Add snippet models to model collection.
     for snippet in get_snippet_models():
-        if snippet._meta.app_label == app:
+        if snippet._meta.app_label == app_label:
             models.append(snippet)
 
     # Create add each model to correct section of registry.
@@ -83,12 +90,12 @@ def register_model(cls: type, type_prefix: str):
             register_documment_model(cls, type_prefix)
         elif issubclass(cls, AbstractImage):
             register_image_model(cls, type_prefix)
+        elif issubclass(cls, AbstractRendition):
+            register_image_model(cls, type_prefix)
         elif issubclass(cls, BaseSetting):
             register_settings_model(cls, type_prefix)
         elif cls in get_snippet_models():
             register_snippet_model(cls, type_prefix)
-        elif issubclass(cls, BaseBlock):
-            register_streamfield_model(cls, type_prefix)
         else:
             register_django_model(cls, type_prefix)
 
@@ -98,6 +105,7 @@ def get_fields_and_properties(cls):
     Return all fields and @property methods for a model.
     """
     fields = [field.name for field in cls._meta.get_fields(include_parents=False)]
+
     properties = []
     try:
         properties = [
@@ -108,6 +116,75 @@ def get_fields_and_properties(cls):
         properties = []
 
     return fields + properties
+
+
+def get_field_type(field):
+    # If a tuple is returned then obj[1] wraps obj[0]
+    field_wrapper = None
+    if isinstance(field, tuple):
+        field, field_wrapper = field
+        if callable(field):
+            field = field()
+
+    field_type = field.field_type
+    if field_type is not None:
+        if field_wrapper:
+            return field, field_wrapper(field_type)
+        else:
+            if callable(field_type):
+                field_type = field_type()
+            return field, field_type
+
+
+def model_resolver(field):
+    def mixin(self, instance, info, **kwargs):
+        from .utils import resolve_queryset
+
+        cls_field = getattr(instance, field.field_source)
+
+        # If queryset then call .all() method
+        if issubclass(type(cls_field), models.Manager):
+            # Shortcut to extract one nested field from an list of objects
+            def get_nested_field(cls, extract_key):
+                # If last value in list then return that from the class.
+                if len(extract_key) == 1:
+                    return getattr(cls, extract_key[0])
+
+                # Get data from nested field
+                field = getattr(cls, extract_key[0])
+                if field is None:
+                    return None
+                if issubclass(type(field), models.Manager):
+                    field = field.all()
+
+                # If field data is a list then iterate over it
+                if isinstance(field, Iterable):
+                    return [
+                        get_nested_field(nested_cls, extract_key[1:])
+                        for nested_cls in field
+                    ]
+
+                # If single value then return it.
+                return get_nested_field(field, extract_key[1:])
+
+            if field.extract_key:
+                return [
+                    get_nested_field(cls, field.extract_key) for cls in cls_field.all()
+                ]
+
+            # Check if any queryset params:
+            if not kwargs:
+                return cls_field.all()
+            return resolve_queryset(cls_field, info, **kwargs)
+
+        # If method then call and return result
+        if callable(cls_field):
+            return cls_field()
+
+        # If none of those then just return field
+        return cls_field
+
+    return mixin
 
 
 def build_node_type(
@@ -122,37 +199,77 @@ def build_node_type(
     """
     type_name = type_prefix + cls.__name__
 
-    # Create a new blank node type
-    class Meta:
-        model = cls
-        interfaces = (interface,) if interface is not None else tuple()
-        exclude_fields = tuple()
+    # Create a tempory model and tempory node that will be replaced later on.
+    class StubModel(models.Model):
+        class Meta:
+            managed = False
 
-    type_meta = {"Meta": Meta}
-    type_meta.update({"id": graphene.ID()})
+    class StubMeta:
+        model = StubModel
 
-    # Build a list fields that shouldn't be reflected in GQL type.
-    exclude_fields = get_fields_and_properties(cls)
+    type_meta = {
+        "Meta": StubMeta,
+        "type": lambda: {
+            "cls": cls,
+            "lazy": True,
+            "name": type_name,
+            "base_type": base_type,
+            "interface": interface,
+        },
+    }
 
-    # Add any custom fields to node if they are defined.
-    if hasattr(cls, "graphql_fields"):
-        for field in cls.graphql_fields:
-            if callable(field):
-                field = field()
+    return type("Stub" + type_name, (DjangoObjectType,), type_meta)
 
-            # Take current field out of exclude_fields array
-            if field.field_name in exclude_fields:
-                exclude_fields.remove(field.field_name)
 
-            # Add field to GQL type with correct field-type
-            if field.field_type is not None:
-                type_meta[field.field_name] = field.field_type
+def load_type_fields():
+    for list_name in registry.lazy_types:
+        type_list = getattr(registry, list_name)
 
-    # Set excluded fields to stop errors cropping up from unsupported field
-    # types.
-    type_meta["Meta"].exclude_fields = exclude_fields
+        for key, node in type_list.items():
+            type_definition = node.type()
+            if type_definition.get("lazy"):
+                # Get the original django model data
+                cls = type_definition.get("cls")
+                base_type = type_definition.get("base_type")
+                interface = type_definition.get("interface")
+                type_name = type_definition.get("name")
 
-    return type(type_name, (base_type,), type_meta)
+                # Recreate the graphene type with the fields set
+                class Meta:
+                    model = cls
+                    interfaces = (interface,) if interface is not None else tuple()
+
+                type_meta = {"Meta": Meta, "id": graphene.ID(), "name": type_name}
+                exclude_fields = get_fields_and_properties(cls)
+
+                # Add any custom fields to node if they are defined.
+                methods = {}
+                if hasattr(cls, "graphql_fields"):
+                    for field in cls.graphql_fields:
+                        if callable(field):
+                            field = field()
+
+                        # Add field to GQL type with correct field-type
+                        field, field_type = get_field_type(field)
+                        type_meta[field.field_name] = field_type
+
+                        # Remove field from excluded list
+                        if field.field_name in exclude_fields:
+                            exclude_fields.remove(field.field_name)
+
+                        # Add a custom resolver for each field
+                        methods["resolve_" + field.field_name] = model_resolver(field)
+
+                # Replace stud node with real thing
+                type_meta["Meta"].exclude_fields = exclude_fields
+                node = type(type_name, (base_type,), type_meta)
+
+                # Add custom resolvers for fields
+                for name, method in methods.items():
+                    setattr(node, name, MethodType(method, node))
+
+                # Update list with new node
+                type_list[key] = node
 
 
 def convert_to_underscore(name):
@@ -210,16 +327,18 @@ def build_streamfield_type(
     if hasattr(cls, "graphql_fields"):
         for field in cls.graphql_fields:
             if callable(field):
-                field = field()    
+                field = field()
+
+            # Get correct types from field
+            field, field_type = get_field_type(field)
+
             # Add support for `graphql_fields`
             methods["resolve_" + field.field_name] = streamfield_resolver
 
             # Add field to GQL type with correct field-type
-            if field.field_type is not None:
-                type_meta[field.field_name] = field.field_type
+            type_meta[field.field_name] = field_type
 
-    # Set excluded fields to stop errors cropping up from unsupported field
-    # types.
+    # Set excluded fields to stop errors cropping up from unsupported field types.
     graphql_node = type(type_name, (base_type,), type_meta)
 
     for name, method in methods.items():
@@ -267,7 +386,7 @@ def register_documment_model(cls: Type[AbstractDocument], type_prefix: str):
 def register_image_model(cls: Type[AbstractImage], type_prefix: str):
     """
     Create a graphene node type for a model than inherits from AbstractImage.
-    Only one model will actually be generated because a default image model
+    Only one type will actually be generated because a default image model
     needs to be set in settings.
     """
 
@@ -275,8 +394,27 @@ def register_image_model(cls: Type[AbstractImage], type_prefix: str):
     if cls in registry.images:
         return
 
-    # Create a GQL type derived from document model.
+    # Create a GQL type derived from image model.
     image_node_type = build_node_type(cls, type_prefix, None, ImageObjectType)
+
+    # Add image type to registry.
+    if image_node_type:
+        registry.images[cls] = image_node_type
+
+
+def register_image_rendition_model(cls: Type[AbstractRendition], type_prefix: str):
+    """
+    Create a graphene node type for a model than inherits from AbstractImageRendition.
+    Only one type will actually be generated because a default image model
+    needs to be set in settings.
+    """
+
+    # Avoid gql type duplicates
+    if cls in registry.images:
+        return
+
+    # Create a GQL type derived from image rendition model.
+    image_node_type = build_node_type(cls, type_prefix, None, AbstractRendition)
 
     # Add image type to registry.
     if image_node_type:
