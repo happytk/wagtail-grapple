@@ -45,7 +45,6 @@ def import_apps():
             streamfield_type["interface"],
             base_type,
         )
-
         registry.streamfield_blocks[streamfield_type["cls"]] = node_type
 
 
@@ -172,11 +171,19 @@ def streamfield_resolver(self, instance, info, **kwargs):
 
     return value
 
+
 def streamfield_render(self, instance, info, **kwargs):
     # field_name = convert_to_underscore(info.field_name)
     # block = instance.block.child_blocks[field_name]
     # value = instance.value[field_name]
-    return instance.render()
+    from django.template.context import RequestContext
+    from django import template
+
+    context = RequestContext(request=info.context)
+    with context.bind_template(
+        template.Template('<html>dummy</html>')
+    ) as _:
+        return instance.render(context=context)
 
 
 def build_streamfield_type(
@@ -198,13 +205,13 @@ def build_streamfield_type(
         else:
             interfaces = (interface,) if interface is not None else tuple()
 
-    methods = {
-        "resolve__dangerous_render": streamfield_render
-    }
+    methods = dict()
     type_name = type_prefix + cls.__name__
     type_meta = {"Meta": Meta}
     type_meta.update({"id": graphene.String()})
-    type_meta.update({"_dangerous_render": graphene.String()})
+    if hasattr(cls, "render") and callable(cls.render):
+        type_meta.update({"_dangerous_render": graphene.String()})
+        methods["resolve__dangerous_render"] = streamfield_render
 
     # Add any custom fields to node if they are defined.
     if hasattr(cls, "graphql_fields"):
