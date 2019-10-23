@@ -183,7 +183,7 @@ def streamfield_render(self, instance, info, **kwargs):
     with context.bind_template(
         template.Template('<html>dummy</html>')
     ) as _:
-        return instance.render(context=context)
+        return instance.render(context=context.flatten())
 
 
 def build_streamfield_type(
